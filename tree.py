@@ -12,16 +12,18 @@ def main(argv):
 def getPDFContent(path):
   pdfpartition = []
   # patterns to look for
-  subclasspat = "\s*(Subclass)\s+([A-Z]+)\s+"
-  subclassespat = "\s*(Subclasses)\s+([A-Z]+)-[A-Z]+\s+"
-  classpat = "\s+(CLASS)\s+[A-Za-z]+-\s*([A-Za-z\s]+)\s+"
+  subclasspat = "(Subclass)\s+([A-Z]+)"
+  subclassespat = "(Subclasses)\s+[A-Z]+-([A-Z]+)"
+  classpat = "\s+(CLASS)\s+[A-Z]+(-)\s*([A-Z\s]+)\s+"
   #section pattern without range (no dash) (number optional)
-  sectworangepat = "\s*([A-Z]+)\(?(\d+\.?\d*)?\)?\s+"
+  sectworangepat = "\s+([A-Z]+)\(?(\d+)?\.?\d*?\)?\s+"
   #section pattern with range (with dash) (number not optional)
-  sectwrangepat = "\s*([A-Z]+)\(?\d+\.?\d*\)?-\(?(\d+\.?\d*)\)?\s+"
+  sectwnumrangepat = "\s+([A-Z]+)\(?\d+\.?\d*\)?-\(?(\d+\.?\d*)\)?\s+"
+  sectwnumletrangepat = "\s+([A-Z]+)(\d+)\.[A-Z]+-[A-Z]+\s+"
+  sectwletrangepat = "\s+([A-Z]+)-[A-Z]+\s+"
   # pattern used to partition
-  combinedpat= "%s|%s|%s|%s|%s" % ( subclasspat, subclassespat, classpat, sectwrangepat, sectworangepat)
-  patpart = re.compile(str(combinedpat))
+  combinedpat= "%s|%s|%s|%s|%s|%s|%s" % ( sectworangepat, sectwletrangepat, sectwnumrangepat, sectwnumletrangepat, subclasspat, subclassespat, classpat)
+  patpart = re.compile(unicode(combinedpat))
   p = file(path, "rb")
   pdf = pyPdf.PdfFileReader(p)
   num_pages = pdf.getNumPages()
@@ -46,7 +48,7 @@ def convert_pdf(path):
   while line < len(pdfContent) and pdfContent[line]!="CLASS":
     line = line + 1
   # set to name of class
-  while line < len(pdfContent) and pdfContent[line]!="-":
+  while line < len(pdfContent) and pdfContent[line].find("-") == -1:
     line = line + 1
   line = line + 1
   topfoldername = ""
@@ -54,13 +56,13 @@ def convert_pdf(path):
     topfoldername = pdfContent[line]
     line = line + 1
     while line < len(pdfContent) and (pdfContent[line]!="Subclass" and pdfContent[line]!="Subclasses"):
-      topfoldername = topfoldername + " " + str(pdfContent[line])
+      topfoldername = topfoldername + " " + unicode(pdfContent[line])
+      print topfoldername
       line = line + 1
-    print topfoldername
-    topfolder = OrderedBTreeFolder(str(topfoldername))
+    topfolder = OrderedBTreeFolder(unicode(topfoldername))
   else :
     print "CLASS NOT FOUND IN PDF"
-    System.exit(1)
+    sys.exit(1)
   # get the subclass section id
   while line < len(pdfContent):
     line = findSubclass(topfolder, pdfContent, line + 1)
@@ -68,32 +70,36 @@ def convert_pdf(path):
 
 def findSubclass(root, content, line):
   # get id of subclass
-  subclassid = str(content[line])
+  subclassid = unicode(content[line])
   line = line + 1
   # get id of line following subclass
-  if(str(content[line]).startswith(subclassid)):
+  if(unicode(content[line]).startswith(subclassid)):
     line = line + 1
-    idnumorstring = str(content[line])
+    idnumorstring = unicode(content[line])
     if(idnumorstring.replace(".","").isdigit()):
       line = line + 1
-  subclassname = str(content[line])
+  subclassname = unicode(content[line])
+  print " " + subclassname
   subclassfolder = OrderedBTreeFolder(subclassname)
+  try:
+    root._setOb(subclassfolder.id, subclassfolder)
+  except KeyError:
+    subclassfolder = root._getOb(subclassfolder.id)
   line = getContentsofSubclass(subclassfolder, content, line + 1)
-  root._setOb(subclassfolder.id, subclassfolder)
   return line
 
 def getContentsofSubclass(subroot, content, line):
   # keep track of how far in the subsection we are
   leveloffolder = 0
   # keep track of what the currentid and maxnum is at each subsection
-  ids = [str(content[line])]
+  ids = [unicode(content[line])]
   maxnum = [0]
   folders = []
   while line + 1 < len(content) and (content[line]!="Subclass" and content[line]!="Subclasses"):
     # get id, number(optional), and name of subsection
     idofsubsection = content[line]
     line = line + 1
-    idnumorstring = str(content[line])
+    idnumorstring = unicode(content[line])
     if(idnumorstring.replace(".","").isdigit()):
       line = line + 1
       number = float(idnumorstring)
@@ -106,21 +112,22 @@ def getContentsofSubclass(subroot, content, line):
         maxnum.append(number)
       else :
         maxnum[leveloffolder + 1] = number
-    nameofsubsection = str(content[line])
+    nameofsubsection = unicode(content[line])
+    print "  " + unicode( " " * leveloffolder) + nameofsubsection
     line = line + 1
     subsection = OrderedBTreeFolder(nameofsubsection)
-    if(leveloffolder == 0):
+    leveloffolder = leveloffolder + 1
+    if(leveloffolder == 1):
       # set the folder underneath the subclass
       subroot._setOb(subsection.id, subsection)
       if(leveloffolder >= len(folders)):
         folders.append(subsection)
         ids.append(idofsubsection)
-      while leveloffolder>=len(maxnum):
-        maxnum.append(0)
       else :
         folders[leveloffolder]= subsection
         ids[leveloffolder]=idofsubsection
-      leveloffolder = leveloffolder + 1
+      while leveloffolder>=len(maxnum):
+        maxnum.append(0)
       
     else :
       # set folder underneath subsection
@@ -128,13 +135,14 @@ def getContentsofSubclass(subroot, content, line):
       if(leveloffolder >= len(folders)):
         folders.append(subsection)
         ids.append(idofsubsection)
-      while leveloffolder>=len(maxnum):
-        maxnum.append(0)
       else :
         folders[leveloffolder]= subsection
         ids[leveloffolder] = idofsubsection
-      leveloffolder = leveloffolder + 1
       parent._setOb(subsection.id, subsection)
+      while leveloffolder>=len(maxnum):
+        maxnum.append(0)
+    
+
   return line
 
 if __name__ == '__main__': sys.exit(main(sys.argv))
